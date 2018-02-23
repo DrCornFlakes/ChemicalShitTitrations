@@ -1,0 +1,149 @@
+#/usr/bin/python env
+
+import csv
+from numpy import *
+from scipy.optimize import curve_fit
+from scipy.optimize import leastsq
+from scipy.stats import chisquare
+from scipy.stats import norm
+import matplotlib.pyplot as plt
+from matplotlib.pyplot import gca
+import matplotlib as mpl
+from matplotlib.backends.backend_pdf import PdfPages
+
+### ---- User input parameters  ---- ##
+RNAconc = 0.03
+
+freqH = 599.662816 #Frequency of 13C on spectrometer
+freqC = 150.806189 #Frequency of 1H on spectrometer
+repmc = 2000
+
+file_name = 'name_here'
+pdf = PdfPages("name_here.pdf")
+fnout = 'name_here'
+
+### ---- Define Function to Fit  ---- ##
+def fitkd(x,Kd,dCS,CSfree):
+    return CSfree+(dCS*(x/(Kd+x)))
+
+data = []
+### ---- Open file, get data ---- ##
+with open(file_name,'rb') as csvfile:
+    data_import = csv.reader(csvfile, delimiter=',', quotechar='|')
+    for i in data_import:
+        data.append(i)
+### ---- Sort data into dictionary ---- ##
+d = {}
+for i in xrange(shape(data)[1]):
+    d[data[0][i]] = []
+    for x in data[1:]:
+        d[data[0][i]].append(float(x[i]))
+
+mpl.rcParams["axes.formatter.useoffset"]=False
+fig, axes = plt.subplots(nrows=6,ncols=5)
+### ---- Plotting Variables ---- ##
+def PlotKd(salt,CSobs,FitVals,FitErr,func,resi,nrow,ncol):
+
+    ### ---- Define trendline bounds based on salt concentrations used --- ###s
+    findconc = linspace(0.001,100,100000)
+
+    title = (r'{0},$K_{1}mM={2}\pm{3}mM$').format(resi,'{1/2}',round(fit[0],4),round(fit_err[0],4))
+    axes[nrow,ncol].set_xlim(0.001,100)
+    axes[nrow,ncol].set_title(title,fontsize='large')
+    axes[nrow,ncol].semilogx(findconc,func(findconc,FitVals[0]+FitErr[0], FitVals[1]+FitErr[1], FitVals[2]+FitErr[2]), '-', c = 'c', linewidth = 1)
+    axes[nrow,ncol].semilogx(findconc,func(findconc,FitVals[0]-FitErr[0], FitVals[1]-FitErr[1], FitVals[2]-FitErr[2]), '-', c = 'c', linewidth = 1)
+    #axes[nrow,ncol].fill_between(findconc, func(findconc,FitVals[0]+FitErr[0], FitVals[1]+FitErr[1], FitVals[2]+FitErr[2]),\
+    #func(findconc,FitVals[0]-FitErr[0], FitVals[1]-FitErr[1], FitVals[2]-FitErr[2]), facecolor='deepskyblue', alpha=0.5)
+    axes[nrow,ncol].semilogx(findconc,func(findconc,FitVals[0],FitVals[1],FitVals[2]), '-', c = 'red', linewidth = 1.5)
+    axes[nrow,ncol].scatter(salt,CSobs, c = 'k', s=30)
+    axes[nrow,ncol].scatter(0.0015,CSobs[0], c='g', s=30)
+    axes[nrow,ncol].tick_params(axis='both',labelsize='x-small')
+
+
+for i in d:
+    if i == 'Concentration':
+        salt = list(d['Concentration'])
+
+csvfile = open(fnout,'wb')
+f = csv.writer(csvfile, delimiter=',', quotechar='|', quoting=csv.QUOTE_MINIMAL)
+f.writerow(['Residue','Kd (mM)','Kd Er','CS Free (ppm)', 'CSF Er','Max dw (ppm)', 'dw Er','chi2'])
+
+residuals=[]
+for i in d:
+    if i != 'Concentration':
+        CSobs = list(d[i])
+        fit, matcov = curve_fit(fitkd, salt, CSobs, p0=[0.1,list(d[i])[0]-list(d[i])[7],list(d[i])[0]], bounds=[[0,-500.,-500.],[500.,500.,500.]])
+        chi2 = chisquare(CSobs,fitkd(salt,fit[0],fit[1],fit[2]))
+        line = fitkd(salt,fit[0],fit[1],fit[2])
+        if "H8" in i:
+            x = residuals.append((CSobs-line)*freqH)
+        elif "H2" in i:
+            x = residuals.append((CSobs-line)*freqH)
+        elif "H6" in i:
+            x = residuals.append((CSobs-line)*freqH)
+        else:
+            x = residuals.append((CSobs-line)*freqC)
+
+#Monte Carlo on Residuals
+resnums = []
+for i in residuals:
+    for x in i:
+        resnums.append(x)
+#best fit of residuals
+(mu, sigma) = norm.fit(resnums)
+
+count = 0
+for i in d:
+    print i
+    if i != 'Concentration':
+        if "H8" in i:
+            er = sigma/freqH
+        elif "H2" in i:
+            er = sigma/freqH
+        elif "H6" in i:
+            er = sigma/freqH
+        else:
+            er = sigma/freqC
+        CSobs = list(d[i])
+        fits_kd=[]
+        fits_cs=[]
+        fits_dw=[]
+        for x in range(repmc):
+            fit, matcov = curve_fit(fitkd, salt, CSobs, p0=[0.1,list(d[i])[0]-list(d[i])[7],list(d[i])[0]], bounds=[[0,-500.,-500.],[500.,500.,500.]])
+            erCSobs = ndarray.tolist(CSobs + random.randn(len(CSobs))*er)
+            fitMC, matcovMC = curve_fit(fitkd, salt, erCSobs, p0=[0.1,list(d[i])[0]-list(d[i])[7],list(d[i])[0]], bounds=[[0,-500.,-500.],[500.,500.,500.]])
+            chi2 = chisquare(CSobs,fitkd(salt,fit[0],fit[1],fit[2]))
+            fits_kd.append(fitMC[0])
+            fits_cs.append(fitMC[2])
+            fits_dw.append(fitMC[1])
+        fit_err = [std(fits_kd),std(fits_cs),std(fits_dw)]
+        count = count+1
+        if count <= 5:
+            nrow = 0
+            ncol = count-1
+        elif count <= 10:
+            nrow = 1
+            ncol = count-6
+        elif count <= 15:
+            nrow = 2
+            ncol = count-11
+        elif count <= 20:
+            nrow = 3
+            ncol = count-16
+        elif count <= 25:
+            nrow = 4
+            ncol = count-21
+        elif count <= 30:
+            nrow = 5
+            ncol = count-26
+        f.writerow([i, round(fit[0],4), round(fit_err[0],4),round(fit[2],4),round(fit_err[2],4),round(fit[1],4),round(fit_err[1],4),chi2])
+        PlotKd(salt,CSobs,fit,fit_err,fitkd,i,nrow,ncol)
+
+
+
+fig.set_size_inches(20,20)
+plt.tight_layout()
+pdf.savefig()
+pdf.close()
+
+os.system('start {0}.pdf'.format(fnout))
